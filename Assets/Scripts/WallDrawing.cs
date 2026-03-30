@@ -3,8 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.EnhancedTouch;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
+using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
+using TouchPhase = UnityEngine.InputSystem.TouchPhase;
 
 public class WallDrawing : MonoBehaviour
 {
@@ -29,6 +32,9 @@ public class WallDrawing : MonoBehaviour
     [Header("Eraser Settings")]
     [SerializeField] private float eraserRadius = 0.03f;
 
+    [Header("Depth Detection")]
+    [SerializeField] private float maxVerticalDot = 0.4f;
+
     private List<StrokeInstance> strokeInstances = new List<StrokeInstance>();
     private StrokeInstance currentStroke;
     private List<Vector3> currentLocalPoints = new List<Vector3>();
@@ -36,62 +42,173 @@ public class WallDrawing : MonoBehaviour
     private bool isEraserMode;
 
     private static List<ARRaycastHit> hits = new List<ARRaycastHit>();
+    private ARPlaneHighlight lastHighlighted;
+
+    // Crosshair state for depth-based wall detection
+    private bool isCrosshairOnWall;
+    public bool IsCrosshairOnWall => isCrosshairOnWall;
 
     private string SavePath => Path.Combine(Application.persistentDataPath, saveFileName);
 
     private void Start()
     {
+        EnhancedTouchSupport.Enable();
         LoadDrawing();
+    }
+
+    private void OnDestroy()
+    {
+        EnhancedTouchSupport.Disable();
     }
 
     private void Update()
     {
-        if (Input.touchCount == 0)
+        UpdateWallDetection();
+
+        if (Touch.activeTouches.Count == 0)
         {
             if (isDrawing) StopDrawing();
             return;
         }
 
-        Touch touch = Input.GetTouch(0);
-        if (IsPointerOverUI(touch.position)) return;
+        var touch = Touch.activeTouches[0];
+        Vector2 screenPos = touch.screenPosition;
 
-        if (Input.touchCount > 1)
+        if (IsPointerOverUI(screenPos)) return;
+
+        if (Touch.activeTouches.Count > 1)
         {
             if (isDrawing) StopDrawing();
             return;
         }
 
-        if (arRaycastManager.Raycast(touch.position, hits, TrackableType.PlaneWithinPolygon))
+        // Try depth raycast first (more accurate), fall back to plane raycast
+        if (TryDepthRaycast(screenPos, out Vector3 worldPoint, out Vector3 normal))
         {
-            ARRaycastHit hit = hits[0];
-            ARPlane plane = arPlaneManager.GetPlane(hit.trackableId);
+            Vector3 offsetPoint = worldPoint + normal * wallOffset;
+            Quaternion wallRotation = Quaternion.LookRotation(-normal, Vector3.up);
+            HandleDrawInput(touch, offsetPoint, wallRotation);
+        }
+        else if (TryPlaneRaycast(screenPos, out worldPoint, out normal))
+        {
+            Vector3 offsetPoint = worldPoint + normal * wallOffset;
+            Quaternion wallRotation = Quaternion.LookRotation(-normal, Vector3.up);
+            HandleDrawInput(touch, offsetPoint, wallRotation);
+        }
+    }
 
-            if (plane == null || plane.alignment != PlaneAlignment.Vertical)
-                return;
+    private bool TryDepthRaycast(Vector2 screenPos, out Vector3 worldPoint, out Vector3 normal)
+    {
+        worldPoint = Vector3.zero;
+        normal = Vector3.forward;
 
-            Vector3 worldPoint = hit.pose.position + plane.normal * wallOffset;
-            Quaternion wallRotation = Quaternion.LookRotation(-plane.normal, Vector3.up);
+        if (!arRaycastManager.Raycast(screenPos, hits, TrackableType.Depth))
+            return false;
 
-            if (isEraserMode)
+        var hitPose = hits[0].pose;
+        Vector3 surfaceNormal = hitPose.up;
+
+        // Make sure normal points towards camera
+        Vector3 toCamera = (Camera.main.transform.position - hitPose.position).normalized;
+        if (Vector3.Dot(surfaceNormal, toCamera) < 0)
+            surfaceNormal = -surfaceNormal;
+
+        // Check if surface is vertical (normal is mostly horizontal)
+        float verticalDot = Mathf.Abs(Vector3.Dot(surfaceNormal, Vector3.up));
+        if (verticalDot > maxVerticalDot)
+            return false;
+
+        worldPoint = hitPose.position;
+        normal = surfaceNormal;
+        return true;
+    }
+
+    private bool TryPlaneRaycast(Vector2 screenPos, out Vector3 worldPoint, out Vector3 normal)
+    {
+        worldPoint = Vector3.zero;
+        normal = Vector3.forward;
+
+        if (!arRaycastManager.Raycast(screenPos, hits, TrackableType.PlaneWithinPolygon))
+            return false;
+
+        ARPlane plane = arPlaneManager.GetPlane(hits[0].trackableId);
+        if (!ARPlaneHighlight.IsWall(plane))
+            return false;
+
+        worldPoint = hits[0].pose.position;
+        normal = plane.normal;
+        return true;
+    }
+
+    private void HandleDrawInput(UnityEngine.InputSystem.EnhancedTouch.Touch touch, Vector3 worldPoint, Quaternion wallRotation)
+    {
+        if (isEraserMode)
+        {
+            if (touch.phase == TouchPhase.Began || touch.phase == TouchPhase.Moved)
+                EraseAtPoint(worldPoint);
+            return;
+        }
+
+        switch (touch.phase)
+        {
+            case TouchPhase.Began:
+                StartDrawing(worldPoint, wallRotation);
+                break;
+            case TouchPhase.Moved:
+                ContinueDrawing(worldPoint);
+                break;
+            case TouchPhase.Ended:
+            case TouchPhase.Canceled:
+                StopDrawing();
+                break;
+        }
+    }
+
+    private void UpdateWallDetection()
+    {
+        Vector2 screenCenter = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+
+        // Check depth first
+        bool wallFound = TryDepthRaycast(screenCenter, out _, out _);
+
+        // Fall back to plane check
+        if (!wallFound)
+        {
+            if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon))
             {
-                if (touch.phase == TouchPhase.Began || touch.phase == TouchPhase.Moved)
-                    EraseAtPoint(worldPoint);
+                ARPlane plane = arPlaneManager.GetPlane(hits[0].trackableId);
+                wallFound = ARPlaneHighlight.IsWall(plane);
+            }
+        }
+
+        isCrosshairOnWall = wallFound;
+
+        // Also update plane highlighting
+        UpdatePlaneHighlight(screenCenter);
+    }
+
+    private void UpdatePlaneHighlight(Vector2 screenCenter)
+    {
+        if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon))
+        {
+            ARPlane plane = arPlaneManager.GetPlane(hits[0].trackableId);
+            if (plane != null && ARPlaneHighlight.IsWall(plane))
+            {
+                var highlight = plane.GetComponent<ARPlaneHighlight>();
+                if (highlight != null && highlight != lastHighlighted)
+                {
+                    if (lastHighlighted != null) lastHighlighted.SetHighlighted(false);
+                    highlight.SetHighlighted(true);
+                    lastHighlighted = highlight;
+                }
                 return;
             }
+        }
 
-            switch (touch.phase)
-            {
-                case TouchPhase.Began:
-                    StartDrawing(worldPoint, wallRotation);
-                    break;
-                case TouchPhase.Moved:
-                    ContinueDrawing(worldPoint);
-                    break;
-                case TouchPhase.Ended:
-                case TouchPhase.Canceled:
-                    StopDrawing();
-                    break;
-            }
+        if (lastHighlighted != null)
+        {
+            lastHighlighted.SetHighlighted(false);
+            lastHighlighted = null;
         }
     }
 
@@ -100,20 +217,17 @@ public class WallDrawing : MonoBehaviour
         isDrawing = true;
         currentLocalPoints.Clear();
 
-        // Create an AR Anchor at the start point, oriented to face away from the wall
         var anchorGo = new GameObject("StrokeAnchor_" + strokeInstances.Count);
         anchorGo.transform.SetPositionAndRotation(worldPoint, wallRotation);
         var anchor = anchorGo.AddComponent<ARAnchor>();
 
-        // Create stroke as child of anchor -> moves with the anchor
         var strokeGo = new GameObject("Stroke");
         strokeGo.transform.SetParent(anchor.transform, false);
 
         var lr = strokeGo.AddComponent<LineRenderer>();
-        lr.useWorldSpace = false; // Points are in anchor-local space
+        lr.useWorldSpace = false;
         ConfigureLineRenderer(lr);
 
-        // First point at local origin (anchor is at worldPoint)
         Vector3 localPoint = Vector3.zero;
         currentLocalPoints.Add(localPoint);
         lr.positionCount = 1;
@@ -134,7 +248,6 @@ public class WallDrawing : MonoBehaviour
     {
         if (!isDrawing || currentStroke == null || currentStroke.anchor == null) return;
 
-        // Convert world point to anchor-local space
         Vector3 localPoint = currentStroke.anchor.transform.InverseTransformPoint(worldPoint);
 
         if (currentLocalPoints.Count > 0)
@@ -157,7 +270,6 @@ public class WallDrawing : MonoBehaviour
         }
         else if (isDrawing && currentLocalPoints.Count <= 1 && currentStroke != null)
         {
-            // Remove single-point strokes (just a tap, no line)
             strokeInstances.Remove(currentStroke);
             if (currentStroke.anchor != null) Destroy(currentStroke.anchor.gameObject);
         }
@@ -167,9 +279,23 @@ public class WallDrawing : MonoBehaviour
         currentLocalPoints.Clear();
     }
 
+    private Material CreateLineMaterial()
+    {
+        if (lineMaterial != null) return new Material(lineMaterial);
+
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Sprites/Default");
+        var mat = new Material(shader);
+        mat.SetFloat("_Surface", 0);
+        mat.SetInt("_ZWrite", 1);
+        // Disable depth test so strokes are fully visible (not partially hidden by wall depth)
+        mat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+        return mat;
+    }
+
     private void ConfigureLineRenderer(LineRenderer lr)
     {
-        lr.material = lineMaterial != null ? new Material(lineMaterial) : new Material(Shader.Find("Sprites/Default"));
+        lr.material = CreateLineMaterial();
         lr.material.color = brushColor;
         lr.startWidth = brushSize;
         lr.endWidth = brushSize;
@@ -292,14 +418,12 @@ public class WallDrawing : MonoBehaviour
         var saveData = JsonUtility.FromJson<DrawingSaveData>(json);
         if (saveData == null || saveData.strokes == null || saveData.strokes.Count == 0) return;
 
-        // Clear existing
         foreach (var s in strokeInstances)
         {
             if (s.anchor != null) Destroy(s.anchor.gameObject);
         }
         strokeInstances.Clear();
 
-        // Recreate each stroke with its anchor
         for (int i = 0; i < saveData.strokes.Count; i++)
         {
             var data = saveData.strokes[i];
@@ -309,18 +433,16 @@ public class WallDrawing : MonoBehaviour
             Quaternion anchorRot = new Quaternion(data.anchorRotX, data.anchorRotY, data.anchorRotZ, data.anchorRotW);
             Color color = new Color(data.colorR, data.colorG, data.colorB, data.colorA);
 
-            // Recreate anchor
             var anchorGo = new GameObject("StrokeAnchor_" + i);
             anchorGo.transform.SetPositionAndRotation(anchorPos, anchorRot);
             var anchor = anchorGo.AddComponent<ARAnchor>();
 
-            // Recreate stroke as child
             var strokeGo = new GameObject("Stroke");
             strokeGo.transform.SetParent(anchor.transform, false);
 
             var lr = strokeGo.AddComponent<LineRenderer>();
             lr.useWorldSpace = false;
-            lr.material = lineMaterial != null ? new Material(lineMaterial) : new Material(Shader.Find("Sprites/Default"));
+            lr.material = CreateLineMaterial();
             lr.material.color = color;
             lr.startWidth = data.size;
             lr.endWidth = data.size;
