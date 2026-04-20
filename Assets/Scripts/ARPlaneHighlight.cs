@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
@@ -10,6 +11,10 @@ public class ARPlaneHighlight : MonoBehaviour
     // Offset along plane normal so the visualization sits in front of the real wall
     private const float planeOffset = 0.03f;
 
+    // Very permissive threshold for wall classification
+    // 0.6 = ~53 degrees from vertical still counts as wall (catches slanted/rough/featureless walls)
+    private const float wallVerticalDotThreshold = 0.6f;
+
     private MeshRenderer meshRenderer;
     private LineRenderer lineRenderer;
     private MeshFilter meshFilter;
@@ -17,7 +22,11 @@ public class ARPlaneHighlight : MonoBehaviour
 
     private static readonly Color wallColor = new Color(0.2f, 0.6f, 1f, 0.15f);
     private static readonly Color highlightColor = new Color(0.2f, 1f, 0.4f, 0.35f);
+    private static readonly Color lineIdleColor = new Color(0.2f, 0.6f, 1f, 0.5f);
+    private static readonly List<Vector3> vertexBuffer = new List<Vector3>();
+    private static Shader cachedLineShader;
 
+    private Vector3[] boundaryBuffer;
     private bool isHighlighted;
 
     private void Awake()
@@ -57,15 +66,35 @@ public class ARPlaneHighlight : MonoBehaviour
         UpdateVisibility();
     }
 
+    /// <summary>
+    /// Determines if an ARPlane is a wall. Uses multiple criteria:
+    /// 1. PlaneAlignment.Vertical is always a wall
+    /// 2. NotAxisAligned planes with mostly-horizontal normals are walls
+    /// 3. Even HorizontalUp/Down planes can be walls if their actual normal is near-horizontal
+    ///    (ARCore sometimes misclassifies featureless walls)
+    /// </summary>
     public static bool IsWall(ARPlane plane)
     {
         if (plane == null) return false;
+
+        // Explicitly vertical = wall
         if (plane.alignment == PlaneAlignment.Vertical) return true;
+
+        // Check actual normal direction regardless of classification
+        // This catches white/featureless walls that ARCore may misclassify
+        float verticalDot = Mathf.Abs(Vector3.Dot(plane.normal, Vector3.up));
 
         if (plane.alignment == PlaneAlignment.NotAxisAligned)
         {
-            float verticalDot = Mathf.Abs(Vector3.Dot(plane.normal, Vector3.up));
-            return verticalDot < 0.4f;
+            return verticalDot < wallVerticalDotThreshold;
+        }
+
+        // Even for planes classified as horizontal, if the normal is actually
+        // mostly horizontal, treat as wall (ARCore misclassification on featureless surfaces)
+        // Threshold 0.4 = ~66 degrees from vertical, catches most misclassified white walls
+        if (verticalDot < 0.4f)
+        {
+            return true;
         }
 
         return false;
@@ -91,18 +120,11 @@ public class ARPlaneHighlight : MonoBehaviour
     {
         if (meshRenderer == null || meshRenderer.material == null) return;
 
-        if (isHighlighted)
-        {
-            meshRenderer.material.color = highlightColor;
-            lineRenderer.startColor = Color.green;
-            lineRenderer.endColor = Color.green;
-        }
-        else
-        {
-            meshRenderer.material.color = wallColor;
-            lineRenderer.startColor = new Color(0.2f, 0.6f, 1f, 0.5f);
-            lineRenderer.endColor = new Color(0.2f, 0.6f, 1f, 0.5f);
-        }
+        Color fillColor = isHighlighted ? highlightColor : wallColor;
+        Color lineColor = isHighlighted ? Color.green : lineIdleColor;
+        meshRenderer.material.color = fillColor;
+        lineRenderer.startColor = lineColor;
+        lineRenderer.endColor = lineColor;
     }
 
     private void SetupLineRenderer()
@@ -113,7 +135,8 @@ public class ARPlaneHighlight : MonoBehaviour
         lineRenderer.useWorldSpace = false;
         lineRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         lineRenderer.receiveShadows = false;
-        lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        if (cachedLineShader == null) cachedLineShader = Shader.Find("Sprites/Default");
+        lineRenderer.material = new Material(cachedLineShader);
     }
 
     private void OffsetMeshAlongNormal()
@@ -121,25 +144,29 @@ public class ARPlaneHighlight : MonoBehaviour
         if (meshFilter == null || meshFilter.mesh == null) return;
 
         var mesh = meshFilter.mesh;
-        var vertices = mesh.vertices;
-        for (int i = 0; i < vertices.Length; i++)
+        mesh.GetVertices(vertexBuffer);
+        for (int i = 0; i < vertexBuffer.Count; i++)
         {
-            // In ARPlane local space, Y is the normal direction
-            vertices[i].y = planeOffset;
+            var v = vertexBuffer[i];
+            v.y = planeOffset;
+            vertexBuffer[i] = v;
         }
-        mesh.vertices = vertices;
+        mesh.SetVertices(vertexBuffer);
     }
 
     private void UpdateBoundary()
     {
-        if (arPlane == null || arPlane.boundary.Length < 3) return;
-
+        if (arPlane == null) return;
         var boundary = arPlane.boundary;
-        lineRenderer.positionCount = boundary.Length;
+        if (boundary.Length < 3) return;
+
+        if (boundaryBuffer == null || boundaryBuffer.Length != boundary.Length)
+            boundaryBuffer = new Vector3[boundary.Length];
+
         for (int i = 0; i < boundary.Length; i++)
-        {
-            // Offset boundary along Y (normal) to match mesh offset
-            lineRenderer.SetPosition(i, new Vector3(boundary[i].x, planeOffset, boundary[i].y));
-        }
+            boundaryBuffer[i] = new Vector3(boundary[i].x, planeOffset, boundary[i].y);
+
+        lineRenderer.positionCount = boundary.Length;
+        lineRenderer.SetPositions(boundaryBuffer);
     }
 }

@@ -8,11 +8,10 @@ public class RebuildCanvasEditor
     [MenuItem("ArtReality/Rebuild Drawing Canvas")]
     public static void RebuildCanvas()
     {
-        // Destroy existing DrawingCanvas
         var oldCanvas = GameObject.Find("DrawingCanvas");
         if (oldCanvas != null) Object.DestroyImmediate(oldCanvas);
 
-        // --- Create Canvas ---
+        // --- Canvas ---
         var canvasGo = new GameObject("DrawingCanvas");
         var canvas = canvasGo.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -20,78 +19,135 @@ public class RebuildCanvasEditor
         var scaler = canvasGo.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1080, 1920);
-        scaler.matchWidthOrHeight = 0.5f;
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+        scaler.matchWidthOrHeight = 0f; // match width so portrait phones scale cleanly
         canvasGo.AddComponent<GraphicRaycaster>();
 
+        // Safe-area wrapper: everything lives under this so we respect notch / gesture bar.
+        var safeArea = new GameObject("SafeArea");
+        safeArea.transform.SetParent(canvasGo.transform, false);
+        var saRect = safeArea.AddComponent<RectTransform>();
+        saRect.anchorMin = Vector2.zero;
+        saRect.anchorMax = Vector2.one;
+        saRect.offsetMin = Vector2.zero;
+        saRect.offsetMax = Vector2.zero;
+        safeArea.AddComponent<SafeAreaFitter>();
+
         // =============================================
-        // TOOLBAR (bottom bar)
+        // TOP BAR (GPS + mode)
         // =============================================
-        var toolbar = MakePanel(canvasGo.transform, "Toolbar",
+        var topBar = MakePanel(safeArea.transform, "TopBar",
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1),
+            Vector2.zero, new Vector2(0, 90));
+        topBar.GetComponent<Image>().color = new Color(0, 0, 0, 0.55f);
+
+        var gpsText = MakeText(topBar.transform, "GpsStatusText", "GPS...", TextAnchor.MiddleLeft, 28);
+        var gpsRect = gpsText.GetComponent<RectTransform>();
+        gpsRect.anchorMin = new Vector2(0, 0); gpsRect.anchorMax = new Vector2(0.5f, 1);
+        gpsRect.offsetMin = new Vector2(24, 0); gpsRect.offsetMax = new Vector2(0, 0);
+
+        var modeText = MakeText(topBar.transform, "ModeStatusText", "Mode: Dessin", TextAnchor.MiddleRight, 28);
+        var modeRect = modeText.GetComponent<RectTransform>();
+        modeRect.anchorMin = new Vector2(0.5f, 0); modeRect.anchorMax = new Vector2(1, 1);
+        modeRect.offsetMin = new Vector2(0, 0); modeRect.offsetMax = new Vector2(-24, 0);
+
+        // =============================================
+        // TOOLBAR (bottom) — two rows, responsive
+        // =============================================
+        var toolbar = MakePanel(safeArea.transform, "Toolbar",
             new Vector2(0, 0), new Vector2(1, 0), new Vector2(0.5f, 0),
-            Vector2.zero, new Vector2(0, 180));
-        toolbar.GetComponent<Image>().color = new Color(0.1f, 0.1f, 0.1f, 0.88f);
+            Vector2.zero, new Vector2(0, 320));
+        toolbar.GetComponent<Image>().color = new Color(0.08f, 0.08f, 0.08f, 0.9f);
 
-        var toolbarHLG = toolbar.AddComponent<HorizontalLayoutGroup>();
-        toolbarHLG.spacing = 12;
-        toolbarHLG.padding = new RectOffset(20, 20, 15, 15);
-        toolbarHLG.childAlignment = TextAnchor.MiddleCenter;
-        toolbarHLG.childForceExpandWidth = false;
-        toolbarHLG.childForceExpandHeight = false;
+        var toolbarVLG = toolbar.AddComponent<VerticalLayoutGroup>();
+        toolbarVLG.spacing = 10;
+        toolbarVLG.padding = new RectOffset(18, 18, 14, 14);
+        toolbarVLG.childAlignment = TextAnchor.MiddleCenter;
+        toolbarVLG.childControlWidth = true;
+        toolbarVLG.childControlHeight = false;
+        toolbarVLG.childForceExpandWidth = true;
+        toolbarVLG.childForceExpandHeight = false;
 
-        // Color menu toggle (shows current color)
-        var colorToggle = MakeButton(toolbar.transform, "ColorMenuToggle", "", new Color(0.3f, 0.3f, 0.3f), 80, 80);
+        // Row 1: mode tools + brush
+        var row1 = MakeRow(toolbar.transform, "ModeRow");
+
+        // Color toggle (current color swatch)
+        var colorToggle = MakeToolButton(row1.transform, "ColorMenuToggle", "", new Color(0.3f, 0.3f, 0.3f));
         var previewGo = new GameObject("SelectedColorPreview");
         previewGo.transform.SetParent(colorToggle.transform, false);
         var previewRect = previewGo.AddComponent<RectTransform>();
         previewRect.anchorMin = Vector2.zero;
         previewRect.anchorMax = Vector2.one;
-        previewRect.offsetMin = new Vector2(8, 8);
-        previewRect.offsetMax = new Vector2(-8, -8);
+        previewRect.offsetMin = new Vector2(10, 10);
+        previewRect.offsetMax = new Vector2(-10, -10);
         var previewImg = previewGo.AddComponent<Image>();
         previewImg.color = Color.red;
         previewImg.raycastTarget = false;
 
-        // Eraser button
-        var eraserBtn = MakeButton(toolbar.transform, "EraserButton", "Gomme", new Color(0.85f, 0.85f, 0.85f), 140, 80);
+        var drawBtn = MakeToolButton(row1.transform, "DrawButton", "Dessin", new Color(0.3f, 0.7f, 1f));
+        var eraserBtn = MakeToolButton(row1.transform, "EraserButton", "Gomme", new Color(0.85f, 0.85f, 0.85f));
+        var moveBtn = MakeToolButton(row1.transform, "MoveButton", "Deplacer", new Color(0.85f, 0.85f, 0.85f));
 
-        // Spacer
-        MakeSpacer(toolbar.transform, 10);
+        // Brush slider takes more flexible space
+        var sliderGo = MakeSlider(row1.transform, "BrushSizeSlider");
+        var sliderLE = sliderGo.GetComponent<LayoutElement>();
+        sliderLE.flexibleWidth = 2f;
 
-        // Brush size slider
-        var sliderGo = MakeSlider(toolbar.transform, "BrushSizeSlider", 300, 60);
-
-        // Spacer
-        MakeSpacer(toolbar.transform, 10);
-
-        // Undo
-        MakeButton(toolbar.transform, "UndoButton", "Undo", new Color(0.9f, 0.6f, 0.1f), 120, 70);
-        // Clear
-        MakeButton(toolbar.transform, "ClearButton", "Clear", new Color(0.8f, 0.2f, 0.2f), 120, 70);
-        // Save
-        MakeButton(toolbar.transform, "SaveButton", "Save", new Color(0.2f, 0.7f, 0.3f), 110, 70);
-        // Load
-        MakeButton(toolbar.transform, "LoadButton", "Load", new Color(0.2f, 0.5f, 0.8f), 110, 70);
+        // Row 2: action buttons
+        var row2 = MakeRow(toolbar.transform, "ActionRow");
+        MakeActionButton(row2.transform, "UndoButton", "Annuler", new Color(0.9f, 0.6f, 0.1f));
+        MakeActionButton(row2.transform, "ClearButton", "Effacer tout", new Color(0.8f, 0.2f, 0.2f));
+        MakeActionButton(row2.transform, "SaveButton", "Sauver", new Color(0.2f, 0.7f, 0.3f));
+        MakeActionButton(row2.transform, "LoadButton", "Charger", new Color(0.2f, 0.5f, 0.8f));
 
         // =============================================
-        // COLOR MENU PANEL (above toolbar, hidden)
+        // COLOR MENU PANEL (floating above toolbar)
         // =============================================
-        var colorPanel = MakePanel(canvasGo.transform, "ColorMenuPanel",
-            new Vector2(0, 0), new Vector2(0, 0), new Vector2(0, 0),
-            new Vector2(20, 190), new Vector2(550, 110));
-        colorPanel.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.15f, 0.92f);
+        var colorPanel = MakePanel(safeArea.transform, "ColorMenuPanel",
+            new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0.5f, 0),
+            new Vector2(0, 340), new Vector2(720, 140));
+        colorPanel.GetComponent<Image>().color = new Color(0.12f, 0.12f, 0.12f, 0.95f);
         colorPanel.SetActive(false);
 
         var colorHLG = colorPanel.AddComponent<HorizontalLayoutGroup>();
-        colorHLG.spacing = 12;
-        colorHLG.padding = new RectOffset(15, 15, 12, 12);
+        colorHLG.spacing = 18;
+        colorHLG.padding = new RectOffset(18, 18, 14, 14);
         colorHLG.childAlignment = TextAnchor.MiddleCenter;
-        colorHLG.childForceExpandWidth = false;
-        colorHLG.childForceExpandHeight = false;
+        colorHLG.childControlWidth = true;
+        colorHLG.childControlHeight = true;
+        colorHLG.childForceExpandWidth = true;
+        colorHLG.childForceExpandHeight = true;
 
         Color[] colors = { Color.red, Color.blue, Color.green, Color.yellow, Color.white, Color.black };
         string[] names = { "RedButton", "BlueButton", "GreenButton", "YellowButton", "WhiteButton", "BlackButton" };
         for (int i = 0; i < colors.Length; i++)
-            MakeColorButton(colorPanel.transform, names[i], colors[i], 75);
+            MakeColorButton(colorPanel.transform, names[i], colors[i]);
+
+        // =============================================
+        // CONFIRM DIALOG (centered, responsive)
+        // =============================================
+        var confirm = MakePanel(safeArea.transform, "ConfirmDialog",
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+            Vector2.zero, new Vector2(820, 340));
+        confirm.GetComponent<Image>().color = new Color(0.1f, 0.1f, 0.12f, 0.97f);
+        confirm.SetActive(false);
+
+        var confirmText = MakeText(confirm.transform, "ConfirmText", "Effacer tous les dessins ?", TextAnchor.MiddleCenter, 40);
+        var ctRect = confirmText.GetComponent<RectTransform>();
+        ctRect.anchorMin = new Vector2(0, 0.45f); ctRect.anchorMax = new Vector2(1, 1);
+        ctRect.offsetMin = new Vector2(30, 0); ctRect.offsetMax = new Vector2(-30, -20);
+
+        var yesBtn = MakeActionButton(confirm.transform, "ConfirmYesButton", "Oui", new Color(0.8f, 0.2f, 0.2f));
+        var yR = yesBtn.GetComponent<RectTransform>();
+        yR.anchorMin = new Vector2(0.08f, 0.1f); yR.anchorMax = new Vector2(0.48f, 0.4f);
+        yR.offsetMin = Vector2.zero; yR.offsetMax = Vector2.zero;
+        Object.DestroyImmediate(yesBtn.GetComponent<LayoutElement>());
+
+        var noBtn = MakeActionButton(confirm.transform, "ConfirmNoButton", "Non", new Color(0.3f, 0.3f, 0.3f));
+        var nR = noBtn.GetComponent<RectTransform>();
+        nR.anchorMin = new Vector2(0.52f, 0.1f); nR.anchorMax = new Vector2(0.92f, 0.4f);
+        nR.offsetMin = Vector2.zero; nR.offsetMax = Vector2.zero;
+        Object.DestroyImmediate(noBtn.GetComponent<LayoutElement>());
 
         // =============================================
         // Wire DrawingUI
@@ -105,11 +161,16 @@ public class RebuildCanvasEditor
         Set(type, drawingUI, "wallDrawing", wallDrawing, flags);
         Set(type, drawingUI, "colorMenuToggle", colorToggle.GetComponent<Button>(), flags);
         Set(type, drawingUI, "colorMenuPanel", colorPanel, flags);
+        Set(type, drawingUI, "drawButton", drawBtn.GetComponent<Button>(), flags);
         Set(type, drawingUI, "eraserButton", eraserBtn.GetComponent<Button>(), flags);
+        Set(type, drawingUI, "moveButton", moveBtn.GetComponent<Button>(), flags);
         Set(type, drawingUI, "brushSizeSlider", sliderGo.GetComponent<Slider>(), flags);
         Set(type, drawingUI, "selectedColorPreview", previewImg, flags);
+        Set(type, drawingUI, "gpsStatusText", gpsText, flags);
+        Set(type, drawingUI, "modeStatusText", modeText, flags);
+        Set(type, drawingUI, "confirmDialog", confirm, flags);
+        Set(type, drawingUI, "confirmText", confirmText, flags);
 
-        // Find and wire all buttons by name
         var allBtns = canvasGo.GetComponentsInChildren<Button>(true);
         foreach (var btn in allBtns)
         {
@@ -125,34 +186,74 @@ public class RebuildCanvasEditor
                 case "ClearButton": Set(type, drawingUI, "clearButton", btn, flags); break;
                 case "SaveButton": Set(type, drawingUI, "saveButton", btn, flags); break;
                 case "LoadButton": Set(type, drawingUI, "loadButton", btn, flags); break;
+                case "ConfirmYesButton": Set(type, drawingUI, "confirmYesButton", btn, flags); break;
+                case "ConfirmNoButton": Set(type, drawingUI, "confirmNoButton", btn, flags); break;
             }
         }
 
         EditorUtility.SetDirty(canvasGo);
-        Debug.Log("[ArtReality] DrawingCanvas rebuilt with color menu + eraser.");
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(canvasGo.scene);
+        Debug.Log("[ArtReality] DrawingCanvas rebuilt (responsive, Move mode, safe-area).");
     }
 
-    static GameObject MakePanel(Transform parent, string name, Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot, Vector2 pos, Vector2 size)
+    // --- Helpers ---
+
+    static GameObject MakeRow(Transform parent, string name)
+    {
+        var go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        go.AddComponent<RectTransform>();
+        var hlg = go.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 12;
+        hlg.childAlignment = TextAnchor.MiddleCenter;
+        hlg.childControlWidth = true;
+        hlg.childControlHeight = true;
+        hlg.childForceExpandWidth = true;
+        hlg.childForceExpandHeight = true;
+        var le = go.AddComponent<LayoutElement>();
+        le.preferredHeight = 130;
+        le.flexibleHeight = 0;
+        return go;
+    }
+
+    static GameObject MakePanel(Transform parent, string name, Vector2 aMin, Vector2 aMax, Vector2 pivot, Vector2 pos, Vector2 size)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
         var r = go.AddComponent<RectTransform>();
-        r.anchorMin = anchorMin; r.anchorMax = anchorMax; r.pivot = pivot;
+        r.anchorMin = aMin; r.anchorMax = aMax; r.pivot = pivot;
         r.anchoredPosition = pos; r.sizeDelta = size;
         go.AddComponent<Image>();
         return go;
     }
 
-    static GameObject MakeButton(Transform parent, string name, string label, Color bg, float w, float h)
+    static GameObject MakeToolButton(Transform parent, string name, string label, Color bg)
+    {
+        var go = MakeButtonBase(parent, name, label, bg);
+        var le = go.GetComponent<LayoutElement>();
+        le.minWidth = 100; le.preferredWidth = 140; le.flexibleWidth = 1;
+        le.minHeight = 100; le.preferredHeight = 120; le.flexibleHeight = 0;
+        return go;
+    }
+
+    static GameObject MakeActionButton(Transform parent, string name, string label, Color bg)
+    {
+        var go = MakeButtonBase(parent, name, label, bg);
+        var le = go.GetComponent<LayoutElement>();
+        le.minWidth = 100; le.preferredWidth = 180; le.flexibleWidth = 1;
+        le.minHeight = 90; le.preferredHeight = 110; le.flexibleHeight = 0;
+        return go;
+    }
+
+    static GameObject MakeButtonBase(Transform parent, string name, string label, Color bg)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
-        go.AddComponent<RectTransform>().sizeDelta = new Vector2(w, h);
+        go.AddComponent<RectTransform>();
         var img = go.AddComponent<Image>();
         img.color = bg;
         go.AddComponent<Button>();
-        var le = go.AddComponent<LayoutElement>();
-        le.preferredWidth = w; le.preferredHeight = h;
+        go.AddComponent<LayoutElement>();
 
         if (!string.IsNullOrEmpty(label))
         {
@@ -160,22 +261,28 @@ public class RebuildCanvasEditor
             tGo.transform.SetParent(go.transform, false);
             var tR = tGo.AddComponent<RectTransform>();
             tR.anchorMin = Vector2.zero; tR.anchorMax = Vector2.one;
-            tR.offsetMin = Vector2.zero; tR.offsetMax = Vector2.zero;
+            tR.offsetMin = new Vector2(6, 4); tR.offsetMax = new Vector2(-6, -4);
             var txt = tGo.AddComponent<Text>();
             txt.text = label;
             txt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            txt.fontSize = 24;
-            txt.color = (label == "Gomme") ? Color.black : Color.white;
+            txt.fontSize = 28;
+            txt.color = (bg.r + bg.g + bg.b) / 3f > 0.65f ? Color.black : Color.white;
             txt.alignment = TextAnchor.MiddleCenter;
+            txt.horizontalOverflow = HorizontalWrapMode.Overflow;
+            txt.verticalOverflow = VerticalWrapMode.Overflow;
+            txt.resizeTextForBestFit = true;
+            txt.resizeTextMinSize = 14;
+            txt.resizeTextMaxSize = 36;
+            txt.raycastTarget = false;
         }
         return go;
     }
 
-    static void MakeColorButton(Transform parent, string name, Color color, float size)
+    static void MakeColorButton(Transform parent, string name, Color color)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
-        go.AddComponent<RectTransform>().sizeDelta = new Vector2(size, size);
+        go.AddComponent<RectTransform>();
         var img = go.AddComponent<Image>();
         img.color = color;
         go.AddComponent<Button>();
@@ -184,37 +291,45 @@ public class RebuildCanvasEditor
         ol.effectDistance = new Vector2(2, 2);
         ol.enabled = false;
         var le = go.AddComponent<LayoutElement>();
-        le.preferredWidth = size; le.preferredHeight = size;
+        le.minWidth = 80; le.preferredWidth = 110; le.flexibleWidth = 1;
+        le.minHeight = 80; le.preferredHeight = 110; le.flexibleHeight = 1;
     }
 
-    static void MakeSpacer(Transform parent, float width)
-    {
-        var go = new GameObject("Spacer");
-        go.transform.SetParent(parent, false);
-        go.AddComponent<RectTransform>();
-        var le = go.AddComponent<LayoutElement>();
-        le.preferredWidth = width;
-    }
-
-    static GameObject MakeSlider(Transform parent, string name, float w, float h)
+    static Text MakeText(Transform parent, string name, string content, TextAnchor align, int fontSize)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
-        go.AddComponent<RectTransform>().sizeDelta = new Vector2(w, h);
+        go.AddComponent<RectTransform>();
+        var txt = go.AddComponent<Text>();
+        txt.text = content;
+        txt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        txt.fontSize = fontSize;
+        txt.color = Color.white;
+        txt.alignment = align;
+        txt.raycastTarget = false;
+        return txt;
+    }
+
+    static GameObject MakeSlider(Transform parent, string name)
+    {
+        var go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        go.AddComponent<RectTransform>();
         var le = go.AddComponent<LayoutElement>();
-        le.preferredWidth = w; le.preferredHeight = h;
+        le.minWidth = 200; le.preferredWidth = 360; le.flexibleWidth = 2;
+        le.minHeight = 80; le.preferredHeight = 100; le.flexibleHeight = 0;
 
         var bg = new GameObject("Background");
         bg.transform.SetParent(go.transform, false);
         var bgR = bg.AddComponent<RectTransform>();
-        bgR.anchorMin = new Vector2(0, 0.25f); bgR.anchorMax = new Vector2(1, 0.75f);
+        bgR.anchorMin = new Vector2(0, 0.35f); bgR.anchorMax = new Vector2(1, 0.65f);
         bgR.offsetMin = Vector2.zero; bgR.offsetMax = Vector2.zero;
         bg.AddComponent<Image>().color = new Color(0.3f, 0.3f, 0.3f);
 
         var fillArea = new GameObject("Fill Area");
         fillArea.transform.SetParent(go.transform, false);
         var faR = fillArea.AddComponent<RectTransform>();
-        faR.anchorMin = new Vector2(0, 0.25f); faR.anchorMax = new Vector2(1, 0.75f);
+        faR.anchorMin = new Vector2(0, 0.35f); faR.anchorMax = new Vector2(1, 0.65f);
         faR.offsetMin = new Vector2(10, 0); faR.offsetMax = new Vector2(-10, 0);
 
         var fill = new GameObject("Fill");
@@ -233,7 +348,7 @@ public class RebuildCanvasEditor
         var handle = new GameObject("Handle");
         handle.transform.SetParent(handleArea.transform, false);
         var hR = handle.AddComponent<RectTransform>();
-        hR.sizeDelta = new Vector2(30, 0);
+        hR.sizeDelta = new Vector2(40, 0);
         hR.anchorMin = new Vector2(0.5f, 0); hR.anchorMax = new Vector2(0.5f, 1);
         var hImg = handle.AddComponent<Image>();
         hImg.color = Color.white;

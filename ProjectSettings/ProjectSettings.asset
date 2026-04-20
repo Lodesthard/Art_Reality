@@ -142,7 +142,12 @@ PlayerSettings:
   visionOSBundleVersion: 1.0
   tvOSBundleVersion: 1.0
   bundleVersion: 1.0.0
-  preloadedAssets: []
+  preloadedAssets:
+  - {fileID: 7409956309476867576, guid: 3fd4fc0127790db4bae83f7b77da8d45, type: 2}
+  - {fileID: 11400000, guid: c199e683398494f32b4cde18e73ab731, type: 2}
+  - {fileID: 4800000, guid: c9f956787b1d945e7b36e0516201fc76, type: 3}
+  - {fileID: 4800000, guid: 0945859e5a1034c2cb6dce53cb4fb899, type: 3}
+  - {fileID: 11400000, guid: 11973ac3ca9b0a04ea3082d906ac8628, type: 2}
   metroInputSource: 0
   wsaTransparentSwapchain: 0
   m_HolographicPauseOnTrackingLoss: 1
@@ -812,7 +817,24 @@ PlayerSettings:
   webGLMemoryGeometricGrowthCap: 96
   webGLPowerPreference: 2
   scriptingDefineSymbols:
-    iPhone: UNITY_XR_ARKIT_LOADER_ENABLED
+    Android: UNITY_MCP_READY
+    EmbeddedLinux: UNITY_MCP_READY
+    GameCoreScarlett: UNITY_MCP_READY
+    GameCoreXboxOne: UNITY_MCP_READY
+    LinuxHeadlessSimulation: UNITY_MCP_READY
+    Nintendo Switch: UNITY_MCP_READY
+    PS4: UNITY_MCP_READY
+    PS5: UNITY_MCP_READY
+    QNX: UNITY_MCP_READY
+    Server: UNITY_MCP_READY
+    Stadia: UNITY_MCP_READY
+    Standalone: UNITY_MCP_READY
+    VisionOS: UNITY_MCP_READY
+    WebGL: UNITY_MCP_READY
+    Windows Store Apps: UNITY_MCP_READY
+    XboxOne: UNITY_MCP_READY
+    iPhone: UNITY_XR_ARKIT_LOADER_ENABLED;UNITY_MCP_READY
+    tvOS: UNITY_MCP_READY
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend:

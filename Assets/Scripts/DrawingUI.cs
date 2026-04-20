@@ -17,7 +17,9 @@ public class DrawingUI : MonoBehaviour
     [SerializeField] private Button blackButton;
 
     [Header("Tools")]
+    [SerializeField] private Button drawButton;
     [SerializeField] private Button eraserButton;
+    [SerializeField] private Button moveButton;
     [SerializeField] private Slider brushSizeSlider;
 
     [Header("Actions")]
@@ -26,27 +28,35 @@ public class DrawingUI : MonoBehaviour
     [SerializeField] private Button saveButton;
     [SerializeField] private Button loadButton;
 
+    [Header("Confirmation Dialog")]
+    [SerializeField] private GameObject confirmDialog;
+    [SerializeField] private Button confirmYesButton;
+    [SerializeField] private Button confirmNoButton;
+    [SerializeField] private Text confirmText;
+
     [Header("Feedback")]
     [SerializeField] private Image selectedColorPreview;
+    [SerializeField] private Text gpsStatusText;
+    [SerializeField] private Text modeStatusText;
 
-    private Button currentSelectedButton;
-    private bool isEraserActive;
+    private Button currentSelectedColorButton;
     private Color lastColor;
-    private Image eraserButtonImage;
+    private string lastGpsStatus;
+    private DrawingMode lastDisplayedMode = (DrawingMode)(-1);
+
+    private static readonly Color ToolActiveColor = new Color(0.3f, 0.7f, 1f);
+    private static readonly Color ToolIdleColor = new Color(0.85f, 0.85f, 0.85f);
 
     private void Start()
     {
         lastColor = wallDrawing.GetBrushColor();
 
-        // Color menu starts hidden
-        if (colorMenuPanel != null)
-            colorMenuPanel.SetActive(false);
+        if (colorMenuPanel != null) colorMenuPanel.SetActive(false);
+        if (confirmDialog != null) confirmDialog.SetActive(false);
 
-        // Toggle color menu
         if (colorMenuToggle != null)
             colorMenuToggle.onClick.AddListener(ToggleColorMenu);
 
-        // Color buttons
         SetupColorButton(redButton, Color.red);
         SetupColorButton(blueButton, Color.blue);
         SetupColorButton(greenButton, Color.green);
@@ -54,14 +64,13 @@ public class DrawingUI : MonoBehaviour
         SetupColorButton(whiteButton, Color.white);
         SetupColorButton(blackButton, Color.black);
 
-        // Eraser
+        if (drawButton != null)
+            drawButton.onClick.AddListener(() => SetMode(DrawingMode.Draw));
         if (eraserButton != null)
-        {
-            eraserButtonImage = eraserButton.GetComponent<Image>();
-            eraserButton.onClick.AddListener(ToggleEraser);
-        }
+            eraserButton.onClick.AddListener(() => SetMode(DrawingMode.Erase));
+        if (moveButton != null)
+            moveButton.onClick.AddListener(() => SetMode(DrawingMode.Move));
 
-        // Brush size
         if (brushSizeSlider != null)
         {
             brushSizeSlider.minValue = 0.002f;
@@ -70,24 +79,96 @@ public class DrawingUI : MonoBehaviour
             brushSizeSlider.onValueChanged.AddListener(v => wallDrawing.SetBrushSize(v));
         }
 
-        // Action buttons
-        if (undoButton != null)
-            undoButton.onClick.AddListener(() => wallDrawing.Undo());
-        if (clearButton != null)
-            clearButton.onClick.AddListener(() => wallDrawing.ClearAll());
-        if (saveButton != null)
-            saveButton.onClick.AddListener(() => wallDrawing.SaveDrawing());
-        if (loadButton != null)
-            loadButton.onClick.AddListener(() => wallDrawing.LoadDrawing());
+        if (undoButton != null) undoButton.onClick.AddListener(() => wallDrawing.Undo());
+        if (clearButton != null) clearButton.onClick.AddListener(ShowClearConfirmation);
+        if (saveButton != null) saveButton.onClick.AddListener(() => wallDrawing.SaveDrawing());
+        if (loadButton != null) loadButton.onClick.AddListener(() => wallDrawing.LoadDrawing());
+
+        if (confirmYesButton != null) confirmYesButton.onClick.AddListener(OnConfirmClear);
+        if (confirmNoButton != null) confirmNoButton.onClick.AddListener(HideConfirmation);
 
         UpdateColorPreview(lastColor);
+        RefreshModeButtons();
+    }
+
+    private void Update()
+    {
+        if (gpsStatusText != null)
+        {
+            var status = wallDrawing.GpsStatus;
+            if (status != lastGpsStatus)
+            {
+                gpsStatusText.text = status;
+                lastGpsStatus = status;
+            }
+        }
+
+        if (modeStatusText != null)
+        {
+            var current = wallDrawing.GetMode();
+            if (current != lastDisplayedMode)
+            {
+                modeStatusText.text = current switch
+                {
+                    DrawingMode.Draw => "Mode: Dessin",
+                    DrawingMode.Erase => "Mode: Gomme",
+                    DrawingMode.Move => "Mode: Deplacer",
+                    _ => modeStatusText.text
+                };
+                lastDisplayedMode = current;
+            }
+        }
+    }
+
+    private void SetMode(DrawingMode mode)
+    {
+        wallDrawing.SetMode(mode);
+        RefreshModeButtons();
+    }
+
+    private void RefreshModeButtons()
+    {
+        var current = wallDrawing.GetMode();
+        Tint(drawButton, current == DrawingMode.Draw);
+        Tint(eraserButton, current == DrawingMode.Erase);
+        Tint(moveButton, current == DrawingMode.Move);
+    }
+
+    private static void Tint(Button btn, bool active)
+    {
+        if (btn == null) return;
+        var img = btn.GetComponent<Image>();
+        if (img != null) img.color = active ? ToolActiveColor : ToolIdleColor;
+    }
+
+    private void ShowClearConfirmation()
+    {
+        if (confirmDialog != null)
+        {
+            if (confirmText != null) confirmText.text = "Effacer tous les dessins ?";
+            confirmDialog.SetActive(true);
+        }
+        else
+        {
+            wallDrawing.ClearAll();
+        }
+    }
+
+    private void OnConfirmClear()
+    {
+        wallDrawing.ClearAll();
+        HideConfirmation();
+    }
+
+    private void HideConfirmation()
+    {
+        if (confirmDialog != null) confirmDialog.SetActive(false);
     }
 
     private void ToggleColorMenu()
     {
         if (colorMenuPanel == null) return;
-        bool show = !colorMenuPanel.activeSelf;
-        colorMenuPanel.SetActive(show);
+        colorMenuPanel.SetActive(!colorMenuPanel.activeSelf);
     }
 
     private void SetupColorButton(Button button, Color color)
@@ -99,74 +180,35 @@ public class DrawingUI : MonoBehaviour
 
         button.onClick.AddListener(() =>
         {
-            // Exit eraser mode when picking a color
-            if (isEraserActive) DeactivateEraser();
+            if (wallDrawing.GetMode() != DrawingMode.Draw) SetMode(DrawingMode.Draw);
 
             wallDrawing.SetBrushColor(color);
             lastColor = color;
             UpdateColorPreview(color);
             HighlightSelected(button);
 
-            // Close menu after picking
-            if (colorMenuPanel != null)
-                colorMenuPanel.SetActive(false);
+            if (colorMenuPanel != null) colorMenuPanel.SetActive(false);
         });
-    }
-
-    private void ToggleEraser()
-    {
-        if (isEraserActive)
-            DeactivateEraser();
-        else
-            ActivateEraser();
-    }
-
-    private void ActivateEraser()
-    {
-        isEraserActive = true;
-        wallDrawing.SetEraserMode(true);
-
-        if (eraserButtonImage != null)
-            eraserButtonImage.color = new Color(1f, 0.4f, 0.4f);
-
-        // Reset color button highlight
-        if (currentSelectedButton != null)
-        {
-            var outline = currentSelectedButton.GetComponent<Outline>();
-            if (outline != null) outline.enabled = false;
-            currentSelectedButton = null;
-        }
-    }
-
-    private void DeactivateEraser()
-    {
-        isEraserActive = false;
-        wallDrawing.SetEraserMode(false);
-
-        if (eraserButtonImage != null)
-            eraserButtonImage.color = new Color(0.85f, 0.85f, 0.85f);
     }
 
     private void UpdateColorPreview(Color color)
     {
-        if (selectedColorPreview != null)
-            selectedColorPreview.color = color;
+        if (selectedColorPreview != null) selectedColorPreview.color = color;
     }
 
     private void HighlightSelected(Button button)
     {
-        if (currentSelectedButton != null)
+        if (currentSelectedColorButton != null)
         {
-            var outline = currentSelectedButton.GetComponent<Outline>();
-            if (outline != null) outline.enabled = false;
+            var o = currentSelectedColorButton.GetComponent<Outline>();
+            if (o != null) o.enabled = false;
         }
 
-        currentSelectedButton = button;
-        var newOutline = button.GetComponent<Outline>();
-        if (newOutline == null)
-            newOutline = button.gameObject.AddComponent<Outline>();
-        newOutline.effectColor = Color.white;
-        newOutline.effectDistance = new Vector2(3, 3);
-        newOutline.enabled = true;
+        currentSelectedColorButton = button;
+        var outline = button.GetComponent<Outline>();
+        if (outline == null) outline = button.gameObject.AddComponent<Outline>();
+        outline.effectColor = Color.white;
+        outline.effectDistance = new Vector2(3, 3);
+        outline.enabled = true;
     }
 }
